@@ -1,6 +1,49 @@
 [build-system]
-requires = [
-    "setuptools>=42",
-    "wheel"
-]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "hgvs_shim"
+version = "0.1.0"
+license = { text = "MIT" }
+description = "Abstract PyHGVS and Biocommons HGVS libraries"
+readme = { file = "README.md", content-type = "text/markdown" }
+authors = [{ name = "Dave Lawrence", email = "davmlaw@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "hgvs",
+    "pyhgvs",
+    "cdot",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/SACGF/hgvs_shim"
+"Bug Tracker" = "https://github.com/SACGF/hgvs_shim/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-cov"]
+dev = ["pytest>=8", "pytest-cov", "pysam", "cdot"]
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/hgvs_shim"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+
