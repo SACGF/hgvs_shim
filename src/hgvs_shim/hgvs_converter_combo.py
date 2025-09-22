@@ -1,21 +1,17 @@
 import logging
 
-from genes.hgvs import HGVSVariant, HGVSException
-from genes.hgvs.hgvs_converter import HGVSConverter, HgvsMatchRefAllele, HgvsOriginallyNormalized
-from library.utils import all_equal
-from snpdb.models import VariantCoordinate, GenomeBuild
+from hgvs_shim.hgvs_converter import HGVSConverterType, HGVSConverter, HGVSException
+from hgvs_shim.hgvs_variant import HGVSVariant
 
 
 class ComboCheckerHGVSConverter(HGVSConverter):
     def get_hgvs_converter_type(self) -> 'HGVSConverterType':
-        from genes.hgvs.hgvs_converter import HGVSConverterType
         return HGVSConverterType.COMBO
 
     def get_version(self) -> str:
         return "1.0"
 
-    def __init__(self, genome_build: GenomeBuild, converters, die_on_error=True):
-        super().__init__(genome_build)
+    def __init__(self, converters, die_on_error=True):
         self._converters = converters
         self.die_on_error = die_on_error
 
@@ -57,14 +53,14 @@ class ComboCheckerHGVSConverter(HGVSConverter):
     def create_hgvs_variant(self, hgvs_string: str) -> HGVSVariant:
         return self._call_converters("create_hgvs_variant", hgvs_string)
 
-    def _variant_coordinate_to_g_hgvs(self, vc: VariantCoordinate) -> HGVSVariant:
-        return self._call_converters("_variant_coordinate_to_g_hgvs", vc)
+    def variant_coordinate_to_g_hgvs(self, chrom: str, position: int, ref: str, alt: str) -> HGVSVariant:
+        return self._call_converters("variant_coordinate_to_g_hgvs", chrom, position, ref, alt)
 
-    def variant_coordinate_to_c_hgvs(self, vc: VariantCoordinate, transcript_version) -> HGVSVariant:
-        return self._call_converters("variant_coordinate_to_c_hgvs", vc, transcript_version)
+    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_version) -> HGVSVariant:
+        return self._call_converters("variant_coordinate_to_c_hgvs", chrom, position, ref, alt, transcript_version)
 
-    def hgvs_to_variant_coordinate_reference_match_and_normalized(self, hgvs_string: str, transcript_version) -> tuple[VariantCoordinate, HgvsMatchRefAllele, HgvsOriginallyNormalized]:
-        return self._call_converters("hgvs_to_variant_coordinate_and_reference_match", hgvs_string, transcript_version)
+    def hgvs_to_variant_coordinate(self, hgvs_string: str) -> tuple[str, int, str, str]:
+        return self._call_converters("hgvs_to_variant_coordinate", hgvs_string)
 
     def c_hgvs_remove_gene_symbol(self, hgvs_string: str) -> str:
         return self._call_converters("c_hgvs_remove_gene_symbol", hgvs_string)

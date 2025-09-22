@@ -105,7 +105,7 @@ class HGVSVariant(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def format(self, use_compat=False, max_ref_length=settings.HGVS_MAX_REF_ALLELE_LENGTH):
+    def format(self, allow_inv=False, max_ref_length=None):
         pass
 
     @abc.abstractmethod

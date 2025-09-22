@@ -5,24 +5,23 @@ from importlib import metadata
 from typing import Optional
 
 from bioutils.sequences import reverse_complement
-from hgvs_variant.assemblymapper import AssemblyMapper
-from hgvs_variant.edit import NARefAlt
-from hgvs_variant.exceptions import HGVSDataNotAvailableError, HGVSError, HGVSInvalidVariantError, HGVSInvalidIntervalError, \
+from hgvs import parser
+from hgvs.assemblymapper import AssemblyMapper
+from hgvs.dataproviders.interface import Interface
+from hgvs.edit import NARefAlt
+from hgvs.exceptions import HGVSDataNotAvailableError, HGVSError, HGVSInvalidVariantError, HGVSInvalidIntervalError, \
     HGVSNormalizationError, HGVSParseError, HGVSUnsupportedOperationError, HGVSInternalError, HGVSUsageError, \
     HGVSVerifyFailedError
-from hgvs_variant.extras.babelfish import Babelfish
-from hgvs_variant.normalizer import Normalizer
-from hgvs_variant.parser import Parser
-from hgvs_variant.sequencevariant import SequenceVariant
-from hgvs_variant.validator import ExtrinsicValidator
-from hgvs_variant.variantmapper import VariantMapper
+from hgvs.extras.babelfish import Babelfish
+from hgvs.normalizer import Normalizer
+from hgvs.sequencevariant import SequenceVariant
+from hgvs.validator import ExtrinsicValidator
+from hgvs.variantmapper import VariantMapper
+from pyhgvs import get_refseq_type
 
-from genes.hgvs import HGVSVariant, HGVSException, HGVSNomenclatureException, HGVSImplementationException
-from genes.hgvs.biocommons_hgvs.data_provider import DjangoTranscriptDataProvider
-from genes.hgvs.hgvs_converter import HGVSConverter, HgvsMatchRefAllele, HgvsOriginallyNormalized, HGVSConverterType
-from genes.models import TranscriptVersion
-from genes.transcripts_utils import looks_like_transcript, get_refseq_type
-from snpdb.models import GenomeBuild, VariantCoordinate, Contig
+from hgvs_shim.hgvs_converter import HGVSConverter, HGVSNomenclatureException, HGVSImplementationException, \
+    HGVSException, HGVSConverterType
+from hgvs_shim.hgvs_variant import HGVSVariant
 
 
 class BioCommonsHGVSVariant(HGVSVariant):
@@ -76,14 +75,16 @@ class BioCommonsHGVSVariant(HGVSVariant):
     def get_cdna_coords(self) -> str:
         return str(self._sequence_variant.posedit.pos.start)
 
-    def format(self, use_compat=False, max_ref_length=settings.HGVS_MAX_REF_ALLELE_LENGTH):
+    def format(self, allow_inv=False, max_ref_length=None):
         sv: SequenceVariant = self._sequence_variant
-        if use_compat:
+        if not allow_inv:
             if sv.posedit.edit.type == "inv":
                 ref = sv.posedit.edit.ref
                 sv.posedit.edit = NARefAlt(ref=ref, alt=reverse_complement(ref))
 
-        conf = {"max_ref_length": max_ref_length}
+        conf = {}
+        if max_ref_length:
+            conf["max_ref_length"] = max_ref_length
         return sv.format(conf)
 
     def get_gene_symbol_if_no_transcript(self) -> Optional[str]:
@@ -101,56 +102,14 @@ class BioCommonsHGVSVariant(HGVSVariant):
         return gene_symbol
 
 
-class HgvsMatchTranscriptAndGenomeRefAllele(HgvsMatchRefAllele):
-    """ This stores both transcript and Genomic ref/alt so we can report if different """
-
-    def __init__(self, strand: Optional[str], provided_ref: str, calculated_ref):
-        # HgvsMatchRefAllele wants genomic refs, may need to convert
-        self.provided_transcript_ref = provided_ref
-        self.calculated_transcript_ref = calculated_ref
-        self.strand = strand
-
-        provided_g_ref, calculated_g_ref = self._get_genomic_provided_and_calculated_ref_from_transcript()
-        super().__init__(provided_g_ref, calculated_g_ref)
-
-    def _get_genomic_provided_and_calculated_ref_from_transcript(self):
-        if self.strand and self.strand == "-":
-            provided_g_ref = reverse_complement(self.provided_transcript_ref)
-            calculated_g_ref = reverse_complement(self.calculated_transcript_ref)
-        else:
-            provided_g_ref = self.provided_transcript_ref
-            calculated_g_ref = self.calculated_transcript_ref
-        return provided_g_ref, calculated_g_ref
-
-    def __bool__(self):
-        return super().__bool__() and self.provided_transcript_ref and self.provided_transcript_ref == self.calculated_transcript_ref
-
-    def get_message(self) -> str:
-        if self.provided_ref:
-            provided_g_ref, calculated_g_ref = self._get_genomic_provided_and_calculated_ref_from_transcript()
-            if self.provided_transcript_ref != provided_g_ref:
-                message = f'Using transcript reference "{self.calculated_transcript_ref}" from transcript sequence in place of provided reference "{self.provided_transcript_ref}". ' \
-                          f'Transcript (strand="{self.strand}") and genome reference "{self.calculated_ref}" differ.'
-            else:
-                message = f'Using {self.ref_type} reference "{self.calculated_ref}" from {self.ref_source}, in place of provided reference "{self.provided_ref}"'
-        else:
-            message = ""
-        return message
-
-
 class BioCommonsHGVSConverter(HGVSConverter):
     hgvs_span_trailing_int_length_pattern = re.compile(r"(.*(?:del|dup|inv))(\d+)$")
 
-    def __init__(self, genome_build: GenomeBuild, hdp: Interface):
-        super().__init__(genome_build)
+    def __init__(self, assembly_name: str, hdp: Interface):
         self.hdp = hdp
-        if genome_build.name == 'GRCh37':
-            assembly_name = genome_build.get_build_with_patch()  # Need to include patch to get MT in GRCh37
-        else:
-            assembly_name = genome_build.name
         self.babelfish = Babelfish(self.hdp, assembly_name)
         self.am = AssemblyMapper(self.hdp,
-                                 assembly_name=genome_build.name,
+                                 assembly_name=assembly_name,
                                  alt_aln_method='splign',
                                  replace_reference=True)
         self.ev = ExtrinsicValidator(self.hdp)
@@ -201,18 +160,17 @@ class BioCommonsHGVSConverter(HGVSConverter):
         sv_normalized = self.no_validate_normalizer.normalize(sv)
         return BioCommonsHGVSVariant(sv_normalized)
 
-    def _variant_coordinate_to_sequence_variant(self, vc: VariantCoordinate) -> SequenceVariant:
-        chrom, position, ref, alt, _svlen = vc.as_external_explicit(self.genome_build)
+    def _variant_coordinate_to_sequence_variant(self, chrom: str, position: int, ref: str, alt: str) -> SequenceVariant:
         return self.babelfish.vcf_to_g_hgvs(chrom, position, ref, alt)
 
-    def _variant_coordinate_to_g_hgvs(self, vc: VariantCoordinate) -> HGVSVariant:
-        var_g = self._variant_coordinate_to_sequence_variant(vc)
+    def variant_coordinate_to_g_hgvs(self, chrom: str, position: int, ref: str, alt: str) -> HGVSVariant:
+        var_g = self._variant_coordinate_to_sequence_variant(chrom, position, ref, alt)
         return BioCommonsHGVSVariant(var_g)
 
-    def variant_coordinate_to_c_hgvs(self, vc: VariantCoordinate, transcript_version) -> HGVSVariant:
+    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_version) -> HGVSVariant:
         """ In VG we call non-coding "c.HGVS" as well - so have to handle that """
         try:
-            var_g = self._variant_coordinate_to_sequence_variant(vc)  # returns normalized (default HGVS 3')
+            var_g = self._variant_coordinate_to_sequence_variant(chrom, position, ref, alt)  # returns normalized (default HGVS 3')
             # Biocommons HGVS doesn't normalize introns as it works with transcript sequences so doesn't have introns
             # workaround is to normalize on genome sequence first, so if it can't norm it's correct
             if transcript_version.strand == '-':
@@ -230,21 +188,16 @@ class BioCommonsHGVSConverter(HGVSConverter):
             var_c.gene = gene_symbol.symbol
         return BioCommonsHGVSVariant(var_c)
 
-    def hgvs_to_variant_coordinate_reference_match_and_normalized(self, hgvs_string: str, transcript_version=None) -> tuple[VariantCoordinate, HgvsMatchRefAllele, HgvsOriginallyNormalized]:
+    def hgvs_to_variant_coordinate(self, hgvs_string: str) -> tuple[str, int, str, str]:
         try:
             var_g, matches_reference, originally_normalized = self._hgvs_to_g_hgvs(hgvs_string)
-            try:
-                (chrom, position, ref, alt, _typ) = self.babelfish.hgvs_to_vcf(var_g)
-                if alt == '.':
-                    alt = ref
-            except HGVSDataNotAvailableError:
-                raise Contig.ContigNotInBuildError()
+            (chrom, position, ref, alt, _typ) = self.babelfish.hgvs_to_vcf(var_g)
+            if alt == '.':
+                alt = ref
         except HGVSError as hgvs_error:
             klass = self._get_exception_class(hgvs_error)
             raise klass(hgvs_error) from hgvs_error
-
-        vc = VariantCoordinate.from_explicit_no_svlen(chrom, position, ref=ref, alt=alt)
-        return vc.as_internal_symbolic(self.genome_build), matches_reference, originally_normalized
+        return chrom, position, ref, alt
 
     def c_hgvs_remove_gene_symbol(self, hgvs_string: str) -> str:
         sequence_variant = self._parser_hgvs(hgvs_string)
@@ -287,86 +240,19 @@ class BioCommonsHGVSConverter(HGVSConverter):
         var_m.type = 'g'
         return var_m
 
-    def _fix_ref(self, var_x: SequenceVariant) -> tuple[SequenceVariant, HgvsMatchRefAllele]:
-        if provided_ref := var_x.posedit.edit.ref_s:
-            var_x_fixed_ref = self.no_validate_mapper._replace_reference(copy.deepcopy(var_x))
-            calculated_ref = var_x_fixed_ref.posedit.edit.ref_s
-            pr_len = len(provided_ref)
-            cr_len = len(calculated_ref)
-            if pr_len != cr_len:
-                msg = f"Calculated reference '{calculated_ref}' length ({cr_len}) different from provided " \
-                      + f"reference '{provided_ref}' length ({pr_len})"
-                raise HGVSInvalidVariantError(msg)
-
-            strand = None
-            if var_x.type in ['c', 'n']:
-                transcript_accession = BioCommonsHGVSConverter._get_transcript_accession_from_sequence_variant(var_x)
-                tv = TranscriptVersion.get_transcript_version(self.genome_build, transcript_accession)
-                strand = tv.strand
-            matches_reference = HgvsMatchTranscriptAndGenomeRefAllele(strand, provided_ref, calculated_ref)
-            return var_x_fixed_ref, matches_reference
-
-        # didn't provide anything so won't say anything
-        return var_x, HgvsMatchRefAllele(provided_ref='', calculated_ref='')
-
-    def _hgvs_to_g_hgvs(self, hgvs_string: str) -> tuple[SequenceVariant, HgvsMatchRefAllele, HgvsOriginallyNormalized]:
+    def _hgvs_to_g_hgvs(self, hgvs_string: str) -> SequenceVariant:
         CONVERT_TO_G = {
             'c': self.am.c_to_g,
             'n': self.am.n_to_g,
             'm': self._m_to_g,
         }
 
-        var_x_original = self._parser_hgvs(hgvs_string)
-        var_x, matches_reference = self._fix_ref(var_x_original)
-
-        # TODO: Maybe we can always just normalize? Need some test cases to make sure
-        # If so, we can remove handling of 'Variant is outside CDS bounds' below
-        originally_normalized = None
-        var_x_normalized = None
-        normalization_error = None
-        try:
-            var_x_normalized = self.no_validate_normalizer.normalize(var_x)
-            originally_normalized = HgvsOriginallyNormalized(original_hgvs=BioCommonsHGVSVariant(var_x_original),
-                                                             normalized_hgvs=BioCommonsHGVSVariant(var_x_normalized))
-        except HGVSUnsupportedOperationError as hgvs_error:
-            normalization_error = hgvs_error
-
-        # We are occasionally passed c. HGVS for non-coding transcripts - convert them to n.
-        if var_x.type == 'c':
-            transcript_accession = self.get_transcript_accession(hgvs_string)
-            if get_refseq_type(transcript_accession) == 'RNA':
-                var_x.type = 'n'
-
-        try:
-            self.ev.validate(var_x, strict=True)  # Validate in transcript range
-        except HGVSInvalidVariantError as hgvs_e:
-            ACCEPTABLE_VALIDATION_MESSAGES = [
-                'Cannot validate sequence of an intronic variant',
-            ]
-            ok = False
-            exception_str = str(hgvs_e)
-            if "Variant is outside CDS bounds" in exception_str:
-                if normalization_error:
-                    raise normalization_error
-                var_x = var_x_normalized
-                ok = True
-            else:
-                for msg in ACCEPTABLE_VALIDATION_MESSAGES:
-                    if msg in exception_str:
-                        ok = True
-                        break
-            if not ok:
-                raise
-
+        var_x = self._parser_hgvs(hgvs_string)
         if converter := CONVERT_TO_G.get(var_x.type):
             var_g = converter(var_x)
-            if not matches_reference:
-                # Set from genomic coord in case it's diff than transcript
-                matches_reference.calculated_ref = var_g.posedit.edit.ref_s
         else:
             var_g = var_x
-
-        return var_g, matches_reference, originally_normalized
+        return var_g
 
     @staticmethod
     def _get_exception_class(hgvs_error: HGVSError) -> type:

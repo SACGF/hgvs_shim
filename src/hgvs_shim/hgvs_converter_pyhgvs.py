@@ -1,23 +1,19 @@
 import logging
 import sys
 from importlib import metadata
-from typing import Optional
+from typing import Optional, Callable
 
 import pyhgvs
-from django.conf import settings
-from pyhgvs import get_genomic_sequence, HGVSName
+from pyhgvs import HGVSName
 from pyhgvs.utils import make_transcript
+from pysam.libcfaidx import FastaFile
 
-from genes.hgvs import HGVSVariant, HGVSException
-from genes.hgvs.hgvs_converter import HGVSConverter, HgvsMatchRefAllele, HGVSConverterType
-from genes.transcripts_utils import transcript_is_lrg
-from snpdb.models import VariantCoordinate
+from hgvs_shim.hgvs_converter import HGVSConverter, HGVSException, HGVSConverterType
+from hgvs_shim.hgvs_variant import HGVSVariant
 
 
 class PyHGVSVariant(HGVSVariant):
-    def __init__(self, hgvs_name: Optional[HGVSName] = None):
-        if isinstance(hgvs_name, HGVSVariant):
-            raise ValueError("Double extra!")
+    def __init__(self, hgvs_name: HGVSName):
         self._hgvs_name = hgvs_name
 
     def _get_length(self) -> int:
@@ -66,7 +62,7 @@ class PyHGVSVariant(HGVSVariant):
     def get_cdna_coords(self) -> str:
         return self._hgvs_name.format_cdna_coords()
 
-    def format(self, use_compat=False, max_ref_length=settings.HGVS_MAX_REF_ALLELE_LENGTH) -> Optional[str]:
+    def format(self, allow_inv=False, max_ref_length=None) -> Optional[str]:
         # would be better practise to throw an error if we couldn't generate
         # but this keeps existing behaviour
         if not self._hgvs_name:
@@ -127,6 +123,10 @@ class PyHGVSVariant(HGVSVariant):
 
 
 class PyHGVSConverter(HGVSConverter):
+    def __init__(self, fasta_file: FastaFile, get_transcript: Callable):
+        self.fasta_file = fasta_file
+        self.get_transcript = get_transcript
+
     @staticmethod
     def _hgvs_name(hgvs_string):
         """ Catches PyHGVS specific exceptions and converts to HGVSException """
@@ -144,46 +144,28 @@ class PyHGVSConverter(HGVSConverter):
         logging.warning("PyHGVSConverter normalize is a no-op")
         return hgvs_variant
 
-    def _variant_coordinate_to_g_hgvs(self, vc: VariantCoordinate) -> HGVSVariant:
-        chrom, position, ref, alt, _svlen = vc.as_external_explicit(self.genome_build)
+    def variant_coordinate_to_g_hgvs(self, chrom: str, position: int, ref: str, alt: str) -> HGVSVariant:
         hgvs_name = pyhgvs.variant_to_hgvs_name(chrom, position, ref, alt,
-                                                self.genome_build.genome_fasta.fasta,
+                                                self.fasta_file,
                                                 transcript=None, max_allele_length=sys.maxsize)
-        contig = self.genome_build.chrom_contig_mappings[chrom]
-        hgvs_name.chrom = contig.refseq_accession
+        #contig = self.genome_build.chrom_contig_mappings[chrom]
+        #hgvs_name.chrom = contig.refseq_accession
         return PyHGVSVariant(hgvs_name)
 
-    def variant_coordinate_to_c_hgvs(self, vc: VariantCoordinate, transcript_version) -> HGVSVariant:
-        pyhgvs_transcript = make_transcript(transcript_version.pyhgvs_data)
-        chrom, position, ref, alt, _svlen = vc.as_external_explicit(self.genome_build)
-        hgvs_name = pyhgvs.variant_to_hgvs_name(chrom, position, ref, alt, self.genome_build.genome_fasta.fasta,
+    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_accession: str) -> HGVSVariant:
+        pyhgvs_transcript = self.get_transcript(transcript_accession)
+        hgvs_name = pyhgvs.variant_to_hgvs_name(chrom, position, ref, alt, self.fasta_file,
                                                 pyhgvs_transcript, max_allele_length=sys.maxsize)
         return PyHGVSVariant(hgvs_name)
 
-    def hgvs_to_variant_coordinate_reference_match_and_normalized(self, hgvs_string: str, transcript_version) -> tuple[VariantCoordinate, HgvsMatchRefAllele, bool]:
-        pyhgvs_transcript = None
+    def hgvs_to_variant_coordinate(self, hgvs_string: str) -> tuple[str, int, str, str]:
         hgvs_name = self._hgvs_name(hgvs_string)
-
-        # Check transcript bounds
-        if transcript_version:
-            pyhgvs_transcript = make_transcript(transcript_version.pyhgvs_data)
-            self._validate_in_transcript_range(pyhgvs_transcript, hgvs_name)
-
-        chrom, position, ref, alt = pyhgvs.parse_hgvs_name(hgvs_string, self.genome_build.genome_fasta.fasta,
-                                                        transcript=pyhgvs_transcript,
-                                                        indels_start_with_same_base=False)
-        contig = self.genome_build.chrom_contig_mappings[chrom]
-        chrom = contig.name
-        vc = VariantCoordinate.from_explicit_no_svlen(chrom, position, ref, alt)
-        matches_reference = self.get_hgvs_match_ref_allele(hgvs_name, pyhgvs_transcript)
-        return vc, matches_reference, True
+        return pyhgvs.parse_hgvs_name(hgvs_name, self.fasta_file)
 
     def c_hgvs_remove_gene_symbol(self, hgvs_string: str) -> str:
         # ClinGen Allele Registry doesn't like gene names - so strip (unless LRG_)
         hgvs_name = self._hgvs_name(hgvs_string)
-        transcript_accession = self.get_transcript_accession(hgvs_string)
-        if not transcript_is_lrg(transcript_accession):
-            hgvs_name.gene = None
+        hgvs_name.gene = None
         return hgvs_name.format()
 
     def get_transcript_accession(self, hgvs_string: str) -> str:
@@ -200,16 +182,6 @@ class PyHGVSConverter(HGVSConverter):
 
     def get_version(self) -> str:
         return metadata.version('pyhgvs')
-
-    def get_hgvs_match_ref_allele(self, hgvs_name, pyhgvs_transcript=None) -> HgvsMatchRefAllele:
-        """Return True if reference allele matches genomic sequence."""
-        is_forward_strand = pyhgvs_transcript.tx_position.is_forward_strand if pyhgvs_transcript else True
-        ref, _ = hgvs_name.get_ref_alt(is_forward_strand,
-                                       raw_dup_alleles=True)  # get raw values so dup isn't always True
-        chrom, start, end = hgvs_name.get_raw_coords(pyhgvs_transcript)
-        fasta = self.genome_build.genome_fasta.fasta
-        genome_ref = get_genomic_sequence(fasta, chrom, start, end)
-        return HgvsMatchRefAllele(provided_ref=ref, calculated_ref=genome_ref)
 
     @staticmethod
     def _validate_in_transcript_range(pyhgvs_transcript, hgvs_name: HGVSName):
