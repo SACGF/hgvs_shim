@@ -5,7 +5,6 @@ from typing import Optional, Callable
 
 import pyhgvs
 from pyhgvs import HGVSName
-from pyhgvs.utils import make_transcript
 from pysam.libcfaidx import FastaFile
 
 from hgvs_shim.hgvs_converter import HGVSConverter, HGVSException, HGVSConverterType
@@ -123,7 +122,7 @@ class PyHGVSVariant(HGVSVariant):
 
 
 class PyHGVSConverter(HGVSConverter):
-    def __init__(self, fasta_file: FastaFile, get_transcript: Callable):
+    def __init__(self, fasta_file: FastaFile, get_transcript: Callable | None = None):
         self.fasta_file = fasta_file
         self.get_transcript = get_transcript
 
@@ -153,6 +152,8 @@ class PyHGVSConverter(HGVSConverter):
         return PyHGVSVariant(hgvs_name)
 
     def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_accession: str) -> HGVSVariant:
+        if self.get_transcript is None:
+            raise NotImplementedError("Did not initialise with get_transcript function")
         pyhgvs_transcript = self.get_transcript(transcript_accession)
         hgvs_name = pyhgvs.variant_to_hgvs_name(chrom, position, ref, alt, self.fasta_file,
                                                 pyhgvs_transcript, max_allele_length=sys.maxsize)
@@ -182,18 +183,3 @@ class PyHGVSConverter(HGVSConverter):
 
     def get_version(self) -> str:
         return metadata.version('pyhgvs')
-
-    @staticmethod
-    def _validate_in_transcript_range(pyhgvs_transcript, hgvs_name: HGVSName):
-        # @see https://varnomen.hgvs.org/bg-material/numbering/
-        # Transcript Flanking: it is not allowed to describe variants in nucleotides beyond the boundaries of the
-        # reference sequence using the reference sequence
-        NAMES = {
-            "cdna_start": hgvs_name.cdna_start,
-            "cdna_end": hgvs_name.cdna_end,
-        }
-        for description, cdna_coord in NAMES.items():
-            genomic_coord = pyhgvs_transcript.cdna_to_genomic_coord(cdna_coord)
-            within_transcript = pyhgvs_transcript.tx_position.chrom_start <= genomic_coord <= pyhgvs_transcript.tx_position.chrom_stop
-            if not within_transcript:
-                raise HGVSException(f"{hgvs_name}: {description} {cdna_coord} resolves outside of transcript")
