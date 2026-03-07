@@ -28,17 +28,27 @@ def _all_equal(iterable):
 
 ---
 
-### Hidden pyhgvs Dependency in the Biocommons Converter
+### Hidden pyhgvs Dependencies in the Biocommons Converter
 
-`hgvs_converter_biocommons.py` imports `from pyhgvs import get_refseq_type` to detect RNA transcripts. This means the biocommons-only path has an undeclared pyhgvs dependency. Fix by inlining:
+`hgvs_converter_biocommons.py` has two undeclared dependencies on pyhgvs:
+
+**1. `from pyhgvs import get_refseq_type`** — used to detect whether a c. HGVS transcript is actually non-coding (NR_/XR_) so it can be converted as `n.` rather than `c.`. Fix by inlining using the same 3-char prefix approach pyhgvs uses (from its `REFSEQ_PREFIXES` table):
 
 ```python
-def _get_refseq_type(transcript_accession: str) -> str:
-    if transcript_accession.startswith('NR_'):
-        return 'RNA'
-    if transcript_accession.startswith('NM_'):
-        return 'mRNA'
-    return 'unknown'
+_REFSEQ_TRANSCRIPT_TYPES = {
+    'NM_': 'mRNA', 'XM_': 'mRNA',
+    'NR_': 'RNA',  'XR_': 'RNA',
+}
+
+def _get_refseq_type(accession: str) -> str:
+    return _REFSEQ_TRANSCRIPT_TYPES.get(accession[:3], None)
+```
+
+**2. `looks_like_transcript`** — called at lines 100 and 219 but never defined or imported anywhere in the shim. This is a live `NameError`. Based on pyhgvs's `REFSEQ_PREFIXES` (mRNA types: NM_, XM_; RNA types: NR_, XR_) and Ensembl (ENST prefix), the correct implementation is:
+
+```python
+def _looks_like_transcript(accession: str) -> bool:
+    return accession.startswith(('NM_', 'NR_', 'XM_', 'XR_', 'ENST'))
 ```
 
 ---
@@ -87,18 +97,25 @@ The right move: **delete `tests/pyhgvs_tests/`** and port the `_name_variants` t
 
 ### Test Infrastructure: Transcript Data for Biocommons
 
-The biocommons converter needs a transcript data provider (`hdp`, implementing `hgvs.dataproviders.interface.Interface`). Use `cdot`'s `JSONDataProvider` pointing at a local JSON file.
+The biocommons converter needs a transcript data provider (`hdp`, implementing `hgvs.dataproviders.interface.Interface`). cdot provides two implementations:
 
-Fetch the required transcripts from the cdot REST API (e.g. `https://cdot.cc/transcript/NM_000352.3`) and store the result locally in `tests/data/`. The transcripts needed are:
+- **`JSONDataProvider(["path/to/file.json.gz"])`** — fast (500–1000 tx/sec), requires a local `.json.gz` file
+- **`RESTDataProvider()`** — no local file needed, uses cdot.cc by default, slow (10 tx/sec)
+
+For integration tests, use `RESTDataProvider()` to fetch and locally cache the specific transcripts needed, then store the result as a small `.json.gz` in `tests/integration/data/`. The transcripts needed are:
 `NM_000352.3, NM_007294.3, NM_000016.4, NM_000492.3, NM_000038.5, NM_000018.3, NM_000019.3, NM_000022.2, NM_000023.2, NM_000030.2, ENST00000357654`
 
-This JSON will be small and committable.
+The cdot release JSON.gz files (~15MB for GRCh37 RefSeq) are too large to commit, but a subset file covering only these 11 transcripts will be tiny.
+
+For pyhgvs integration tests, use `cdot.pyhgvs.pyhgvs_transcript.JSONPyHGVSTranscriptFactory` pointing at the same or a separate local JSON file (replacing the `RESTPyHGVSTranscriptFactory` currently in `conftest.py`).
 
 ---
 
 ### Parser Performance
 
-The biocommons `Parser()` constructor was slow (~1.5s) because it compiled a parsley grammar at startup. A fix was merged into biocommons `main` and will be in the next release. Installing from GitHub gives correct performance. No `ParserSingleton` needed in the shim.
+The biocommons `Parser()` constructor was slow (~1.5s) because it compiled a parsley grammar at startup. The fix pre-generates the grammar as Python code (`hgvs.generated.hgvs_grammar.createParserClass`) so `Parser()` construction is now fast. This is merged into biocommons `main`.
+
+The shim's current usage — `from hgvs import parser` then `parser.parse_hgvs_variant(hgvs_string)` — uses the module-level convenience function and is fine as-is. No `ParserSingleton` needed.
 
 ---
 
@@ -125,13 +142,21 @@ pyhgvs = ["pyhgvs", "pysam"]   # full migration layer: run both backends side-by
 
 1. **Add `TranscriptInfo` dataclass** to `hgvs_converter.py` and update both converter implementations to accept it for `variant_coordinate_to_c_hgvs`.
 
-2. **Add `BioCommonsHGVSConverter.from_local_file()` classmethod** so users don't need to know how to construct a cdot `JSONDataProvider`:
+2. **Add `BioCommonsHGVSConverter` factory classmethods** so users don't need to know how to construct a cdot data provider:
 
 ```python
 @classmethod
-def from_local_file(cls, assembly_name: str, transcript_json_path: str) -> 'BioCommonsHGVSConverter':
+def from_local_file(cls, assembly_name: str, transcript_json_gz_path: str) -> 'BioCommonsHGVSConverter':
+    """Use a local cdot JSON.gz file (fast: 500-1000 tx/sec)."""
     from cdot.hgvs.dataproviders import JSONDataProvider
-    hdp = JSONDataProvider([transcript_json_path])
+    hdp = JSONDataProvider([transcript_json_gz_path])
+    return cls(assembly_name, hdp)
+
+@classmethod
+def from_rest_api(cls, assembly_name: str, url: str = None) -> 'BioCommonsHGVSConverter':
+    """Use the cdot REST API (default: cdot.cc). Slower but no local file needed."""
+    from cdot.hgvs.dataproviders import RESTDataProvider
+    hdp = RESTDataProvider(url) if url else RESTDataProvider()
     return cls(assembly_name, hdp)
 ```
 
@@ -198,9 +223,78 @@ The `integration/conftest.py` fixture:
 def biocommons_converter_grch37():
     return BioCommonsHGVSConverter.from_local_file(
         'GRCh37',
-        str(Path(__file__).parent / 'data' / 'test_transcripts.json')
+        str(Path(__file__).parent / 'data' / 'test_transcripts.json.gz')
+    )
+
+@pytest.fixture(scope="session")
+def pyhgvs_transcript_factory_grch37():
+    from cdot.pyhgvs.pyhgvs_transcript import JSONPyHGVSTranscriptFactory
+    return JSONPyHGVSTranscriptFactory(
+        str(Path(__file__).parent / 'data' / 'test_transcripts.json.gz')
     )
 ```
+
+---
+
+---
+
+## Todo
+
+### Phase 1: Fix Bugs
+
+- [ ] `hgvs_converter_combo.py`: define `_all_equal()` helper at module level
+- [ ] `hgvs_converter_combo.py`: replace call to undefined `all_equal(results)` with `_all_equal(results)`
+- [ ] `hgvs_converter_biocommons.py`: add `_looks_like_transcript()` — checks NM_, NR_, XM_, XR_, ENST prefixes (currently called at lines 100 and 219 but never defined or imported — live `NameError`)
+- [ ] `hgvs_converter_biocommons.py`: add `_REFSEQ_TRANSCRIPT_TYPES` dict and `_get_refseq_type()` using 3-char prefix lookup matching pyhgvs's REFSEQ_PREFIXES table
+- [ ] `hgvs_converter_biocommons.py`: remove `from pyhgvs import get_refseq_type`
+- [ ] `hgvs_converter_biocommons.py`: replace all call sites of `get_refseq_type` → `_get_refseq_type`, `looks_like_transcript` → `_looks_like_transcript`
+
+### Phase 2: Dependencies
+
+- [ ] `pyproject.toml`: remove `pyhgvs` and `pysam` from core `dependencies`
+- [ ] `pyproject.toml`: add `[project.optional-dependencies]` with `pyhgvs = ["pyhgvs", "pysam"]`
+- [ ] `pyproject.toml`: update `dev` extras to include the `pyhgvs` extra (so `pip install -e ".[dev]"` still gets everything)
+- [ ] `hgvs_converter_pyhgvs.py`: wrap top-level `import pyhgvs` and `from pysam import FastaFile` in a try/except that sets a module-level flag
+- [ ] `hgvs_converter_pyhgvs.py`: raise a clear `ImportError` with install instructions in `PyHGVSConverter.__init__` if pyhgvs/pysam are absent
+- [ ] `CLAUDE.md`: update install instructions to document the two install targets
+
+### Phase 3: API Cleanup
+
+- [ ] `hgvs_converter.py`: add `TranscriptInfo` dataclass (fields: `accession`, `strand`, `is_coding`, `gene_symbol`)
+- [ ] `hgvs_converter.py`: update the abstract `variant_coordinate_to_c_hgvs` signature to take `TranscriptInfo` instead of bare `transcript_version`
+- [ ] `hgvs_converter_pyhgvs.py`: update `variant_coordinate_to_c_hgvs` to accept `TranscriptInfo`; use `.accession` only
+- [ ] `hgvs_converter_biocommons.py`: update `variant_coordinate_to_c_hgvs` to accept `TranscriptInfo`; use `.strand`, `.is_coding`, `.gene_symbol`
+- [ ] `hgvs_converter_combo.py`: verify `variant_coordinate_to_c_hgvs` delegation still works after signature change
+- [ ] `hgvs_converter_biocommons.py`: add `from_local_file()` classmethod — takes `.json.gz` path, constructs `JSONDataProvider([path])`
+- [ ] `hgvs_converter_biocommons.py`: add `from_rest_api()` classmethod — constructs `RESTDataProvider(url)` or `RESTDataProvider()` for default cdot.cc
+- [ ] `hgvs_variant.py`: rename `allow_inv` parameter to `use_delins_for_inv` in the abstract `format()` method; invert default to `True` (i.e. convert inv→delins by default)
+- [ ] `hgvs_converter_biocommons.py`: update `BioCommonsHGVSVariant.format()` to use `use_delins_for_inv` parameter name and corrected logic
+- [ ] `hgvs_converter_pyhgvs.py`: update `PyHGVSVariant.format()` to use `use_delins_for_inv` parameter name
+- [ ] `src/hgvs_shim/__init__.py`: add explicit imports and `__all__` for the full public API (see plan snippet)
+
+### Phase 4: Restructure Tests
+
+- [ ] Create `tests/unit/` directory with `__init__.py`
+- [ ] Create `tests/integration/` directory with `__init__.py`
+- [ ] Create `tests/integration/data/` directory
+- [ ] Generate `tests/integration/data/test_transcripts.json.gz`: use `RESTDataProvider()` (cdot.cc) to fetch the 11 required transcripts and export a minimal `.json.gz` — transcripts: `NM_000352.3, NM_007294.3, NM_000016.4, NM_000492.3, NM_000038.5, NM_000018.3, NM_000019.3, NM_000022.2, NM_000023.2, NM_000030.2, ENST00000357654`
+- [ ] Create `tests/integration/conftest.py` with:
+  - `biocommons_converter_grch37` session fixture using `BioCommonsHGVSConverter.from_local_file()` pointing at the `.json.gz`
+  - `pyhgvs_transcript_factory_grch37` session fixture using `JSONPyHGVSTranscriptFactory` (replaces current `RESTPyHGVSTranscriptFactory`; skip if pyhgvs extra not installed)
+- [ ] Create `tests/unit/test_hgvs_string_validation.py`: test `HGVSConverter._hgvs_string_validation` — valid inputs, `ins` without sequence, `ins` with integer length, missing colon, string starting with `:` / `c` / `g` / `.`
+- [ ] Create `tests/unit/test_combo_checker.py`: test `ComboCheckerHGVSConverter` with mock converters — converters agree, converters disagree with `die_on_error=True`, converters disagree with `die_on_error=False`, all converters raise, one converter raises and one succeeds
+- [ ] Create `tests/integration/test_biocommons_name_to_variant.py`: port all `_name_variants` entries where `var_canonical=True` from `tests/pyhgvs_tests/test_hgvs_names.py`; use `@pytest.mark.parametrize`
+- [ ] Create `tests/integration/test_biocommons_variant_to_name.py`: port all `_name_variants` entries where `name_canonical=True`; call `variant_coordinate_to_c_hgvs` and assert formatted output matches expected HGVS string
+- [ ] Move `tests/test_pyhgvs_fields.py` to `tests/integration/test_pyhgvs_fields.py`; update fixture references to match new `integration/conftest.py`
+- [ ] Create `tests/integration/test_combo_agreement.py`: run both converters over the ported `_name_variants` data and assert results match
+- [ ] `pyproject.toml`: add pytest markers for `integration` and `pyhgvs` to `[tool.pytest.ini_options]`; make integration tests require explicit `-m integration` or a flag so unit tests run fast by default
+- [ ] Delete `tests/pyhgvs_tests/`
+
+### Phase 5: Cleanup
+
+- [ ] Review `vg_dump/` one final time to confirm nothing is missing from `src/hgvs_shim/`
+- [ ] Delete `vg_dump/`
+- [ ] Update `CLAUDE.md` to reflect the final test structure and any changed commands
 
 ---
 
