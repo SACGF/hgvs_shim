@@ -1,11 +1,10 @@
-import copy
 import os.path
 import re
 from importlib import metadata
 from typing import Optional
 
 from bioutils.sequences import reverse_complement
-from hgvs import parser
+from hgvs.parser import Parser as _HGVSParser
 from hgvs.assemblymapper import AssemblyMapper
 from hgvs.dataproviders.interface import Interface
 from hgvs.edit import NARefAlt
@@ -17,11 +16,43 @@ from hgvs.normalizer import Normalizer
 from hgvs.sequencevariant import SequenceVariant
 from hgvs.validator import ExtrinsicValidator
 from hgvs.variantmapper import VariantMapper
-from pyhgvs import get_refseq_type
 
 from hgvs_shim.hgvs_converter import HGVSConverter, HGVSNomenclatureException, HGVSImplementationException, \
-    HGVSException, HGVSConverterType
+    HGVSException, HGVSConverterType, TranscriptInfo
 from hgvs_shim.hgvs_variant import HGVSVariant
+
+
+_hgvs_parser = _HGVSParser()
+
+
+def _looks_like_transcript(accession: str) -> bool:
+    return accession.startswith(('NM_', 'NR_', 'XM_', 'XR_', 'ENST'))
+
+
+def _chrom_to_ncbi(chrom: str) -> str:
+    """Convert UCSC-style 'chr1'/'chrM' to NCBI-style '1'/'MT' for babelfish input."""
+    if chrom == 'chrM':
+        return 'MT'
+    if chrom.startswith('chr'):
+        return chrom[3:]
+    return chrom
+
+
+def _chrom_to_ucsc(chrom: str) -> str:
+    """Convert NCBI-style '1'/'MT' to UCSC-style 'chr1'/'chrM' for VCF output."""
+    if chrom == 'MT':
+        return 'chrM'
+    if not chrom.startswith('chr'):
+        return 'chr' + chrom
+    return chrom
+
+
+def _make_seqfetcher(fasta_path: Optional[str]):
+    """Return a FastaSeqFetcher if fasta_path given, else None (falls back to NCBI)."""
+    if not fasta_path:
+        return None
+    from cdot.hgvs.dataproviders.fasta_seqfetcher import FastaSeqFetcher
+    return FastaSeqFetcher(fasta_path)
 
 
 class BioCommonsHGVSVariant(HGVSVariant):
@@ -75,9 +106,9 @@ class BioCommonsHGVSVariant(HGVSVariant):
     def get_cdna_coords(self) -> str:
         return str(self._sequence_variant.posedit.pos.start)
 
-    def format(self, allow_inv=False, max_ref_length=None):
+    def format(self, use_delins_for_inv: bool = True, max_ref_length=None):
         sv: SequenceVariant = self._sequence_variant
-        if not allow_inv:
+        if use_delins_for_inv:
             if sv.posedit.edit.type == "inv":
                 ref = sv.posedit.edit.ref
                 sv.posedit.edit = NARefAlt(ref=ref, alt=reverse_complement(ref))
@@ -97,13 +128,43 @@ class BioCommonsHGVSVariant(HGVSVariant):
         transcript = self._get_transcript()
         if not (gene and transcript):
             # Will always be transcript
-            if not looks_like_transcript(transcript):
+            if not _looks_like_transcript(transcript):
                 gene_symbol = transcript
         return gene_symbol
 
 
 class BioCommonsHGVSConverter(HGVSConverter):
     hgvs_span_trailing_int_length_pattern = re.compile(r"(.*(?:del|dup|inv))(\d+)$")
+
+    @classmethod
+    def from_local_file(cls, assembly_name: str, transcript_json_gz_path: str,
+                        fasta_path: str = None) -> 'BioCommonsHGVSConverter':
+        """Use a local cdot JSON.gz file (fast: 500-1000 tx/sec).
+
+        fasta_path: optional path to a genome FASTA file (indexed with pysam/samtools).
+            If provided, sequences are read locally instead of fetched from NCBI.
+        """
+        from cdot.hgvs.dataproviders import JSONDataProvider
+        seqfetcher = _make_seqfetcher(fasta_path)
+        hdp = JSONDataProvider([transcript_json_gz_path], seqfetcher=seqfetcher)
+        return cls(assembly_name, hdp)
+
+    @classmethod
+    def from_rest_api(cls, assembly_name: str, url: str = None,
+                      fasta_path: str = None) -> 'BioCommonsHGVSConverter':
+        """Use the cdot REST API (default: cdot.cc). Slower but no local file needed.
+
+        fasta_path: optional path to a genome FASTA file for local sequence lookups.
+        """
+        from cdot.hgvs.dataproviders import RESTDataProvider
+        seqfetcher = _make_seqfetcher(fasta_path)
+        if url:
+            hdp = RESTDataProvider(url, seqfetcher=seqfetcher)
+        elif seqfetcher:
+            hdp = RESTDataProvider(seqfetcher=seqfetcher)
+        else:
+            hdp = RESTDataProvider()
+        return cls(assembly_name, hdp)
 
     def __init__(self, assembly_name: str, hdp: Interface):
         self.hdp = hdp
@@ -132,7 +193,7 @@ class BioCommonsHGVSConverter(HGVSConverter):
             provided_span_length = int(provided_span_length)
 
         try:
-            sequence_variant = parser.parse_hgvs_variant(hgvs_string)
+            sequence_variant = _hgvs_parser.parse(hgvs_string)
         except HGVSError as hgvs_error:
             klass = BioCommonsHGVSConverter._get_exception_class(hgvs_error)
             raise klass(hgvs_error) from hgvs_error
@@ -161,39 +222,40 @@ class BioCommonsHGVSConverter(HGVSConverter):
         return BioCommonsHGVSVariant(sv_normalized)
 
     def _variant_coordinate_to_sequence_variant(self, chrom: str, position: int, ref: str, alt: str) -> SequenceVariant:
-        return self.babelfish.vcf_to_g_hgvs(chrom, position, ref, alt)
+        return self.babelfish.vcf_to_g_hgvs(_chrom_to_ncbi(chrom), position, ref, alt)
 
     def variant_coordinate_to_g_hgvs(self, chrom: str, position: int, ref: str, alt: str) -> HGVSVariant:
         var_g = self._variant_coordinate_to_sequence_variant(chrom, position, ref, alt)
         return BioCommonsHGVSVariant(var_g)
 
-    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_version) -> HGVSVariant:
+    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_info: TranscriptInfo) -> HGVSVariant:
         """ In VG we call non-coding "c.HGVS" as well - so have to handle that """
         try:
             var_g = self._variant_coordinate_to_sequence_variant(chrom, position, ref, alt)  # returns normalized (default HGVS 3')
             # Biocommons HGVS doesn't normalize introns as it works with transcript sequences so doesn't have introns
             # workaround is to normalize on genome sequence first, so if it can't norm it's correct
-            if transcript_version.strand == '-':
+            if transcript_info.strand == '-':
                 var_g = self.norm_5p.normalize(var_g)
 
-            if transcript_version.is_coding:
-                var_c = self.am.g_to_c(var_g, transcript_version.accession)
+            if transcript_info.is_coding:
+                var_c = self.am.g_to_c(var_g, transcript_info.accession)
             else:
-                var_c = self.am.g_to_n(var_g, transcript_version.accession)
+                var_c = self.am.g_to_n(var_g, transcript_info.accession)
         except HGVSError as e:  # Can be out of bounds etc
             klass = self._get_exception_class(e)
             raise klass(e) from e
 
-        if gene_symbol := transcript_version.gene_symbol:
-            var_c.gene = gene_symbol.symbol
+        if gene_symbol := transcript_info.gene_symbol:
+            var_c.gene = gene_symbol
         return BioCommonsHGVSVariant(var_c)
 
     def hgvs_to_variant_coordinate(self, hgvs_string: str) -> tuple[str, int, str, str]:
         try:
-            var_g, matches_reference, originally_normalized = self._hgvs_to_g_hgvs(hgvs_string)
+            var_g = self._hgvs_to_g_hgvs(hgvs_string)
             (chrom, position, ref, alt, _typ) = self.babelfish.hgvs_to_vcf(var_g)
             if alt == '.':
                 alt = ref
+            chrom = _chrom_to_ucsc(chrom)
         except HGVSError as hgvs_error:
             klass = self._get_exception_class(hgvs_error)
             raise klass(hgvs_error) from hgvs_error
@@ -216,7 +278,7 @@ class BioCommonsHGVSConverter(HGVSConverter):
     def _get_transcript_accession_from_sequence_variant(sequence_variant: SequenceVariant) -> str:
         transcript_accession = ''
         if sequence_variant.type != 'g':
-            if looks_like_transcript(sequence_variant.ac):
+            if _looks_like_transcript(sequence_variant.ac):
                 transcript_accession = sequence_variant.ac
         return transcript_accession
 

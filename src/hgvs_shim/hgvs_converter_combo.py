@@ -4,6 +4,11 @@ from hgvs_shim.hgvs_converter import HGVSConverterType, HGVSConverter, HGVSExcep
 from hgvs_shim.hgvs_variant import HGVSVariant
 
 
+def _all_equal(iterable):
+    items = [x for x in iterable if not isinstance(x, Exception)]
+    return len(set(items)) <= 1
+
+
 class ComboCheckerHGVSConverter(HGVSConverter):
     def get_hgvs_converter_type(self) -> 'HGVSConverterType':
         return HGVSConverterType.COMBO
@@ -39,7 +44,7 @@ class ComboCheckerHGVSConverter(HGVSConverter):
         if has_exception and not has_non_exception:
             raise result
 
-        if not all_equal(results):
+        if not _all_equal(results):
             msg = f"HGVS converters calling {method_str}({args}) returned different results! {results_and_methods})"
             if self.die_on_error:
                 raise ValueError(msg)
@@ -71,6 +76,6 @@ class ComboCheckerHGVSConverter(HGVSConverter):
     def normalize(self, hgvs_variant: HGVSVariant) -> HGVSVariant:
         return self._call_converters("normalize", hgvs_variant)
 
-    def description(self, describe_fallback=True) -> str:
+    def description(self) -> str:
         # This will be different so just return the 1st one
-        return self._converters[0].description(describe_fallback=describe_fallback)
+        return self._converters[0].description()

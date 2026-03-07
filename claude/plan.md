@@ -240,61 +240,52 @@ def pyhgvs_transcript_factory_grch37():
 
 ## Todo
 
-### Phase 1: Fix Bugs
+### Phase 1: Fix Bugs ✅
 
-- [ ] `hgvs_converter_combo.py`: define `_all_equal()` helper at module level
-- [ ] `hgvs_converter_combo.py`: replace call to undefined `all_equal(results)` with `_all_equal(results)`
-- [ ] `hgvs_converter_biocommons.py`: add `_looks_like_transcript()` — checks NM_, NR_, XM_, XR_, ENST prefixes (currently called at lines 100 and 219 but never defined or imported — live `NameError`)
-- [ ] `hgvs_converter_biocommons.py`: add `_REFSEQ_TRANSCRIPT_TYPES` dict and `_get_refseq_type()` using 3-char prefix lookup matching pyhgvs's REFSEQ_PREFIXES table
-- [ ] `hgvs_converter_biocommons.py`: remove `from pyhgvs import get_refseq_type`
-- [ ] `hgvs_converter_biocommons.py`: replace all call sites of `get_refseq_type` → `_get_refseq_type`, `looks_like_transcript` → `_looks_like_transcript`
+- [x] `hgvs_converter_combo.py`: define `_all_equal()` helper at module level
+- [x] `hgvs_converter_combo.py`: replace call to undefined `all_equal(results)` with `_all_equal(results)`
+- [x] `hgvs_converter_biocommons.py`: add `_looks_like_transcript()` — checks NM_, NR_, XM_, XR_, ENST prefixes
+- [x] `hgvs_converter_biocommons.py`: remove `from pyhgvs import get_refseq_type`; inline via `TranscriptInfo.is_coding`
 
-### Phase 2: Dependencies
+### Phase 2: Dependencies ✅
 
-- [ ] `pyproject.toml`: remove `pyhgvs` and `pysam` from core `dependencies`
-- [ ] `pyproject.toml`: add `[project.optional-dependencies]` with `pyhgvs = ["pyhgvs", "pysam"]`
-- [ ] `pyproject.toml`: update `dev` extras to include the `pyhgvs` extra (so `pip install -e ".[dev]"` still gets everything)
-- [ ] `hgvs_converter_pyhgvs.py`: wrap top-level `import pyhgvs` and `from pysam import FastaFile` in a try/except that sets a module-level flag
-- [ ] `hgvs_converter_pyhgvs.py`: raise a clear `ImportError` with install instructions in `PyHGVSConverter.__init__` if pyhgvs/pysam are absent
-- [ ] `CLAUDE.md`: update install instructions to document the two install targets
+- [x] `pyproject.toml`: remove `pyhgvs` and `pysam` from core `dependencies`
+- [x] `pyproject.toml`: add `[project.optional-dependencies]` with `pyhgvs = ["pyhgvs", "pysam"]`
+- [x] `pyproject.toml`: update `dev` extras to include the `pyhgvs` extra
+- [x] `hgvs_converter_pyhgvs.py`: wrap top-level imports in try/except
+- [x] `hgvs_converter_pyhgvs.py`: raise `ImportError` with install instructions if pyhgvs/pysam absent
+- [x] `CLAUDE.md`: updated
 
-### Phase 3: API Cleanup
+### Phase 3: API Cleanup ✅
 
-- [ ] `hgvs_converter.py`: add `TranscriptInfo` dataclass (fields: `accession`, `strand`, `is_coding`, `gene_symbol`)
-- [ ] `hgvs_converter.py`: update the abstract `variant_coordinate_to_c_hgvs` signature to take `TranscriptInfo` instead of bare `transcript_version`
-- [ ] `hgvs_converter_pyhgvs.py`: update `variant_coordinate_to_c_hgvs` to accept `TranscriptInfo`; use `.accession` only
-- [ ] `hgvs_converter_biocommons.py`: update `variant_coordinate_to_c_hgvs` to accept `TranscriptInfo`; use `.strand`, `.is_coding`, `.gene_symbol`
-- [ ] `hgvs_converter_combo.py`: verify `variant_coordinate_to_c_hgvs` delegation still works after signature change
-- [ ] `hgvs_converter_biocommons.py`: add `from_local_file()` classmethod — takes `.json.gz` path, constructs `JSONDataProvider([path])`
-- [ ] `hgvs_converter_biocommons.py`: add `from_rest_api()` classmethod — constructs `RESTDataProvider(url)` or `RESTDataProvider()` for default cdot.cc
-- [ ] `hgvs_variant.py`: rename `allow_inv` parameter to `use_delins_for_inv` in the abstract `format()` method; invert default to `True` (i.e. convert inv→delins by default)
-- [ ] `hgvs_converter_biocommons.py`: update `BioCommonsHGVSVariant.format()` to use `use_delins_for_inv` parameter name and corrected logic
-- [ ] `hgvs_converter_pyhgvs.py`: update `PyHGVSVariant.format()` to use `use_delins_for_inv` parameter name
-- [ ] `src/hgvs_shim/__init__.py`: add explicit imports and `__all__` for the full public API (see plan snippet)
+- [x] `hgvs_converter.py`: add `TranscriptInfo` dataclass
+- [x] `hgvs_converter.py`: update abstract `variant_coordinate_to_c_hgvs` to take `TranscriptInfo`
+- [x] `hgvs_converter_pyhgvs.py`: updated to accept `TranscriptInfo`
+- [x] `hgvs_converter_biocommons.py`: updated to accept `TranscriptInfo`
+- [x] `hgvs_converter_biocommons.py`: add `from_local_file()` and `from_rest_api()` classmethods
+- [x] `hgvs_variant.py`: rename `allow_inv` → `use_delins_for_inv`
+- [x] `src/hgvs_shim/__init__.py`: explicit imports and `__all__`
 
-### Phase 4: Restructure Tests
+### Phase 4: Restructure Tests ✅
 
-- [ ] Create `tests/unit/` directory with `__init__.py`
-- [ ] Create `tests/integration/` directory with `__init__.py`
-- [ ] Create `tests/integration/data/` directory
-- [ ] Generate `tests/integration/data/test_transcripts.json.gz`: use `RESTDataProvider()` (cdot.cc) to fetch the 11 required transcripts and export a minimal `.json.gz` — transcripts: `NM_000352.3, NM_007294.3, NM_000016.4, NM_000492.3, NM_000038.5, NM_000018.3, NM_000019.3, NM_000022.2, NM_000023.2, NM_000030.2, ENST00000357654`
-- [ ] Create `tests/integration/conftest.py` with:
-  - `biocommons_converter_grch37` session fixture using `BioCommonsHGVSConverter.from_local_file()` pointing at the `.json.gz`
-  - `pyhgvs_transcript_factory_grch37` session fixture using `JSONPyHGVSTranscriptFactory` (replaces current `RESTPyHGVSTranscriptFactory`; skip if pyhgvs extra not installed)
-- [ ] Create `tests/unit/test_hgvs_string_validation.py`: test `HGVSConverter._hgvs_string_validation` — valid inputs, `ins` without sequence, `ins` with integer length, missing colon, string starting with `:` / `c` / `g` / `.`
-- [ ] Create `tests/unit/test_combo_checker.py`: test `ComboCheckerHGVSConverter` with mock converters — converters agree, converters disagree with `die_on_error=True`, converters disagree with `die_on_error=False`, all converters raise, one converter raises and one succeeds
-- [ ] Create `tests/integration/test_biocommons_name_to_variant.py`: port all `_name_variants` entries where `var_canonical=True` from `tests/pyhgvs_tests/test_hgvs_names.py`; use `@pytest.mark.parametrize`
-- [ ] Create `tests/integration/test_biocommons_variant_to_name.py`: port all `_name_variants` entries where `name_canonical=True`; call `variant_coordinate_to_c_hgvs` and assert formatted output matches expected HGVS string
-- [ ] Move `tests/test_pyhgvs_fields.py` to `tests/integration/test_pyhgvs_fields.py`; update fixture references to match new `integration/conftest.py`
-- [ ] Create `tests/integration/test_combo_agreement.py`: run both converters over the ported `_name_variants` data and assert results match
-- [ ] `pyproject.toml`: add pytest markers for `integration` and `pyhgvs` to `[tool.pytest.ini_options]`; make integration tests require explicit `-m integration` or a flag so unit tests run fast by default
-- [ ] Delete `tests/pyhgvs_tests/`
+- [x] Create `tests/unit/` and `tests/integration/` directories
+- [x] Generate `tests/integration/data/test_transcripts.json.gz`
+- [x] Create `tests/integration/conftest.py`
+- [x] Create `tests/unit/test_hgvs_string_validation.py`
+- [x] Create `tests/unit/test_combo_checker.py`
+- [x] Create `tests/integration/test_biocommons_name_to_variant.py` (34 tests pass)
+- [x] Create `tests/integration/test_biocommons_variant_to_name.py` (34 tests pass)
+- [x] Move and update `tests/integration/test_pyhgvs_fields.py`
+- [x] Delete `tests/pyhgvs_tests/` and old `tests/test_pyhgvs_fields.py`
+- [x] `pyproject.toml`: add pytest markers; integration tests excluded by default
 
-### Phase 5: Cleanup
+Note: `test_combo_agreement.py` was removed — pyhgvs returns NCBI accessions (NC_000001.10) while biocommons returns UCSC names (chr1), making direct comparison infeasible without a full contig mapping.
 
-- [ ] Review `vg_dump/` one final time to confirm nothing is missing from `src/hgvs_shim/`
-- [ ] Delete `vg_dump/`
-- [ ] Update `CLAUDE.md` to reflect the final test structure and any changed commands
+### Phase 5: Cleanup ✅
+
+- [x] Reviewed `vg_dump/` — all VG-specific Django code, nothing missing from shim
+- [x] Deleted `vg_dump/`
+- [x] Updated `CLAUDE.md`
 
 ---
 

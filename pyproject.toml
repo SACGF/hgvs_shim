@@ -12,7 +12,6 @@ authors = [{ name = "Dave Lawrence", email = "davmlaw@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = [
     "hgvs",
-    "pyhgvs",
     "cdot",
 ]
 classifiers = [
@@ -25,8 +24,9 @@ Homepage = "https://github.com/SACGF/hgvs_shim"
 "Bug Tracker" = "https://github.com/SACGF/hgvs_shim/issues"
 
 [project.optional-dependencies]
+pyhgvs = ["pyhgvs", "pysam"]
 test = ["pytest>=8", "pytest-cov"]
-dev = ["pytest>=8", "pytest-cov", "pysam", "cdot"]
+dev = ["hgvs_shim[pyhgvs]", "pytest>=8", "pytest-cov", "cdot"]
 
 
 [tool.setuptools.packages.find]
@@ -35,9 +35,13 @@ exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q"
+addopts = "-ra -q -m 'not integration'"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: tests requiring cdot data and network/FASTA access (deselected by default)",
+    "pyhgvs: tests requiring pyhgvs/pysam extra and local FASTA file",
+]
 
 [tool.coverage.run]
 branch = true

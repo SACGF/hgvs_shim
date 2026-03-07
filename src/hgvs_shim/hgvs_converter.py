@@ -1,6 +1,8 @@
 import abc
 import re
+from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 from hgvs_shim.hgvs_variant import HGVSVariant
 
@@ -21,6 +23,14 @@ class HGVSConverterType(Enum):
     PYHGVS = 1
     BIOCOMMONS_HGVS = 2
     COMBO = 3
+
+
+@dataclass
+class TranscriptInfo:
+    accession: str
+    strand: str              # '+' or '-'
+    is_coding: bool          # True for NM_/XM_, False for NR_/XR_
+    gene_symbol: Optional[str] = None
 
 
 class HGVSConverter(abc.ABC):
@@ -55,7 +65,7 @@ class HGVSConverter(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_version) -> HGVSVariant:
+    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_info: 'TranscriptInfo') -> HGVSVariant:
         pass
 
     @abc.abstractmethod

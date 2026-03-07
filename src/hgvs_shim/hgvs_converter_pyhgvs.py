@@ -3,11 +3,15 @@ import sys
 from importlib import metadata
 from typing import Optional, Callable
 
-import pyhgvs
-from pyhgvs import HGVSName
-from pysam.libcfaidx import FastaFile
+try:
+    import pyhgvs
+    from pyhgvs import HGVSName
+    from pysam.libcfaidx import FastaFile
+    _PYHGVS_AVAILABLE = True
+except ImportError:
+    _PYHGVS_AVAILABLE = False
 
-from hgvs_shim.hgvs_converter import HGVSConverter, HGVSException, HGVSConverterType
+from hgvs_shim.hgvs_converter import HGVSConverter, HGVSException, HGVSConverterType, TranscriptInfo
 from hgvs_shim.hgvs_variant import HGVSVariant
 
 
@@ -61,7 +65,7 @@ class PyHGVSVariant(HGVSVariant):
     def get_cdna_coords(self) -> str:
         return self._hgvs_name.format_cdna_coords()
 
-    def format(self, allow_inv=False, max_ref_length=None) -> Optional[str]:
+    def format(self, use_delins_for_inv: bool = True, max_ref_length=None) -> Optional[str]:
         # would be better practise to throw an error if we couldn't generate
         # but this keeps existing behaviour
         if not self._hgvs_name:
@@ -122,7 +126,12 @@ class PyHGVSVariant(HGVSVariant):
 
 
 class PyHGVSConverter(HGVSConverter):
-    def __init__(self, fasta_file: FastaFile, get_transcript: Callable | None = None):
+    def __init__(self, fasta_file, get_transcript: Callable | None = None):
+        if not _PYHGVS_AVAILABLE:
+            raise ImportError(
+                "pyhgvs and pysam are required for PyHGVSConverter. "
+                "Install with: pip install 'hgvs_shim[pyhgvs]'"
+            )
         self.fasta_file = fasta_file
         self.get_transcript = get_transcript
 
@@ -151,17 +160,18 @@ class PyHGVSConverter(HGVSConverter):
         #hgvs_name.chrom = contig.refseq_accession
         return PyHGVSVariant(hgvs_name)
 
-    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_accession: str) -> HGVSVariant:
+    def variant_coordinate_to_c_hgvs(self, chrom: str, position: int, ref: str, alt: str, transcript_info: TranscriptInfo) -> HGVSVariant:
         if self.get_transcript is None:
             raise NotImplementedError("Did not initialise with get_transcript function")
-        pyhgvs_transcript = self.get_transcript(transcript_accession)
+        pyhgvs_transcript = self.get_transcript(transcript_info.accession)
         hgvs_name = pyhgvs.variant_to_hgvs_name(chrom, position, ref, alt, self.fasta_file,
                                                 pyhgvs_transcript, max_allele_length=sys.maxsize)
         return PyHGVSVariant(hgvs_name)
 
     def hgvs_to_variant_coordinate(self, hgvs_string: str) -> tuple[str, int, str, str]:
-        hgvs_name = self._hgvs_name(hgvs_string)
-        return pyhgvs.parse_hgvs_name(hgvs_name, self.fasta_file)
+        self._hgvs_name(hgvs_string)  # validate
+        return pyhgvs.parse_hgvs_name(hgvs_string, self.fasta_file,
+                                      get_transcript=self.get_transcript)
 
     def c_hgvs_remove_gene_symbol(self, hgvs_string: str) -> str:
         # ClinGen Allele Registry doesn't like gene names - so strip (unless LRG_)
