@@ -25,7 +25,7 @@ hgvs_shim is a cleaned-up library from this work.
 # Installation
 
 ```bash
-# Biocommons only (for codebases that have already migrated)
+# Biocommons only (pair with any hdp: UTA, cdot, etc.)
 pip install hgvs_shim
 
 # With pyhgvs support (for running both backends side-by-side during migration)
@@ -36,18 +36,29 @@ pip install 'hgvs_shim[pyhgvs]'
 
 ## Setting up the converter
 
+`BioCommonsHGVSConverter` takes any biocommons data provider (`hgvs.dataproviders.interface.Interface`). The simplest option is the default biocommons UTA database connection:
+
 ```python
+import hgvs.dataproviders.uta as uta
 from hgvs_shim import BioCommonsHGVSConverter
 
-# From a local cdot JSON.gz transcript file (fast: 500-1000 tx/sec)
-converter = BioCommonsHGVSConverter.from_local_file(
-    'GRCh37',
-    '/path/to/cdot-0.2.x.refseq.grch37.json.gz',
-    fasta_path='/path/to/GRCh37.fa.gz',  # optional, falls back to NCBI
-)
+hdp = uta.connect()  # connects to biocommons' public UTA PostgreSQL instance
+converter = BioCommonsHGVSConverter('GRCh38', hdp)
+```
 
-# Or from the cdot.cc REST API (no local file needed, ~10 tx/sec)
-converter = BioCommonsHGVSConverter.from_rest_api('GRCh37')
+For faster or offline transcript data, [cdot](https://github.com/SACGF/cdot) provides JSON.gz files and a REST API (`pip install 'hgvs_shim[cdot]'`):
+
+```python
+from cdot.hgvs.dataproviders import JSONDataProvider, RESTDataProvider
+from hgvs_shim import BioCommonsHGVSConverter
+
+# Local JSON.gz file (fast: 500-1000 tx/sec)
+hdp = JSONDataProvider(['/path/to/cdot-0.2.x.refseq.grch37.json.gz'])
+converter = BioCommonsHGVSConverter('GRCh37', hdp)
+
+# cdot.cc REST API (no local file needed, ~10 tx/sec)
+hdp = RESTDataProvider()
+converter = BioCommonsHGVSConverter('GRCh37', hdp)
 ```
 
 ## HGVS string → variant coordinate
@@ -85,11 +96,14 @@ print(normalized.format())
 ## Running both backends in parallel (migration validation)
 
 ```python
-from hgvs_shim import BioCommonsHGVSConverter, PyHGVSConverter, ComboCheckerHGVSConverter
-from pysam import FastaFile
+from cdot.hgvs.dataproviders import JSONDataProvider
 from cdot.pyhgvs.pyhgvs_transcript import JSONPyHGVSTranscriptFactory
+from pysam import FastaFile
+from hgvs_shim import BioCommonsHGVSConverter, PyHGVSConverter, ComboCheckerHGVSConverter
 
-biocommons = BioCommonsHGVSConverter.from_local_file('GRCh37', '/path/to/cdot.json.gz')
+hdp = JSONDataProvider(['/path/to/cdot.json.gz'])
+biocommons = BioCommonsHGVSConverter('GRCh37', hdp)
+
 factory = JSONPyHGVSTranscriptFactory(['/path/to/cdot.json.gz'])
 pyhgvs_conv = PyHGVSConverter(FastaFile('/path/to/GRCh37.fa'), factory.get_transcript_grch37)
 

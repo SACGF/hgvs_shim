@@ -17,10 +17,12 @@ def _fasta_path_or_skip():
 
 @pytest.fixture(scope="session")
 def biocommons_converter_grch37():
+    from cdot.hgvs.dataproviders import JSONDataProvider
+    from cdot.hgvs.dataproviders.fasta_seqfetcher import FastaSeqFetcher
     from hgvs_shim.hgvs_converter_biocommons import BioCommonsHGVSConverter
     fasta_path = _fasta_path_or_skip()
-    return BioCommonsHGVSConverter.from_local_file('GRCh37', TEST_TRANSCRIPTS_JSON_GZ,
-                                                   fasta_path=fasta_path)
+    hdp = JSONDataProvider([TEST_TRANSCRIPTS_JSON_GZ], seqfetcher=FastaSeqFetcher(fasta_path))
+    return BioCommonsHGVSConverter('GRCh37', hdp)
 
 
 @pytest.fixture(scope="session")

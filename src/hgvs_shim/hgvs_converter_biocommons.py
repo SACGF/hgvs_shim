@@ -47,14 +47,6 @@ def _chrom_to_ucsc(chrom: str) -> str:
     return chrom
 
 
-def _make_seqfetcher(fasta_path: Optional[str]):
-    """Return a FastaSeqFetcher if fasta_path given, else None (falls back to NCBI)."""
-    if not fasta_path:
-        return None
-    from cdot.hgvs.dataproviders.fasta_seqfetcher import FastaSeqFetcher
-    return FastaSeqFetcher(fasta_path)
-
-
 class BioCommonsHGVSVariant(HGVSVariant):
     def __init__(self, sequence_variant: SequenceVariant):
         self._sequence_variant = sequence_variant
@@ -135,36 +127,6 @@ class BioCommonsHGVSVariant(HGVSVariant):
 
 class BioCommonsHGVSConverter(HGVSConverter):
     hgvs_span_trailing_int_length_pattern = re.compile(r"(.*(?:del|dup|inv))(\d+)$")
-
-    @classmethod
-    def from_local_file(cls, assembly_name: str, transcript_json_gz_path: str,
-                        fasta_path: str = None) -> 'BioCommonsHGVSConverter':
-        """Use a local cdot JSON.gz file (fast: 500-1000 tx/sec).
-
-        fasta_path: optional path to a genome FASTA file (indexed with pysam/samtools).
-            If provided, sequences are read locally instead of fetched from NCBI.
-        """
-        from cdot.hgvs.dataproviders import JSONDataProvider
-        seqfetcher = _make_seqfetcher(fasta_path)
-        hdp = JSONDataProvider([transcript_json_gz_path], seqfetcher=seqfetcher)
-        return cls(assembly_name, hdp)
-
-    @classmethod
-    def from_rest_api(cls, assembly_name: str, url: str = None,
-                      fasta_path: str = None) -> 'BioCommonsHGVSConverter':
-        """Use the cdot REST API (default: cdot.cc). Slower but no local file needed.
-
-        fasta_path: optional path to a genome FASTA file for local sequence lookups.
-        """
-        from cdot.hgvs.dataproviders import RESTDataProvider
-        seqfetcher = _make_seqfetcher(fasta_path)
-        if url:
-            hdp = RESTDataProvider(url, seqfetcher=seqfetcher)
-        elif seqfetcher:
-            hdp = RESTDataProvider(seqfetcher=seqfetcher)
-        else:
-            hdp = RESTDataProvider()
-        return cls(assembly_name, hdp)
 
     def __init__(self, assembly_name: str, hdp: Interface):
         self.hdp = hdp

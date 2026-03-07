@@ -5,10 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install for development (biocommons + pyhgvs + test deps)
+# Install for development (biocommons + cdot + pyhgvs + test deps)
 pip install -e ".[dev]"
 
-# Install biocommons-only (no pyhgvs/pysam)
+# Install biocommons-only (use with UTA or any other hdp)
 pip install -e "."
 
 # Run unit tests (fast, no external dependencies)
@@ -53,11 +53,7 @@ This library is a compatibility shim for migrating code from [pyhgvs (Counsyl)](
 
 ### Implementations
 
-- **`hgvs_converter_biocommons.py`** — `BioCommonsHGVSConverter` / `BioCommonsHGVSVariant`. Factory classmethods:
-  - `from_local_file(assembly_name, transcript_json_gz_path, fasta_path=None)` — uses cdot `JSONDataProvider`
-  - `from_rest_api(assembly_name, url=None, fasta_path=None)` — uses cdot `RESTDataProvider` (cdot.cc by default)
-
-  Chromosome naming: biocommons uses NCBI style (`'11'`, `'MT'`); the converter maps to/from UCSC (`'chr11'`, `'chrM'`). Biocommons modern HGVS format omits ref sequence after `del`/`dup` (e.g. `c.203del` not `c.203delA`).
+- **`hgvs_converter_biocommons.py`** — `BioCommonsHGVSConverter` / `BioCommonsHGVSVariant`. Constructor takes `(assembly_name, hdp)` where `hdp` is any `hgvs.dataproviders.interface.Interface` (e.g. from cdot or biocommons' UTA). Chromosome naming: biocommons uses NCBI style (`'11'`, `'MT'`); the converter maps to/from UCSC (`'chr11'`, `'chrM'`). Biocommons modern HGVS format omits ref sequence after `del`/`dup` (e.g. `c.203del` not `c.203delA`).
 
 - **`hgvs_converter_pyhgvs.py`** — `PyHGVSConverter` / `PyHGVSVariant`. Requires pyhgvs+pysam extras (`pip install 'hgvs_shim[pyhgvs]'`). Raises `ImportError` at instantiation if not installed. Takes a `pysam.FastaFile` and optional `get_transcript` callable. `normalize()` is a no-op. Returns NCBI-style chromosome accessions from `hgvs_to_variant_coordinate`.
 
@@ -70,4 +66,5 @@ This library is a compatibility shim for migrating code from [pyhgvs (Counsyl)](
 - `HGVSVariant.format(use_delins_for_inv=True)` converts `inv` edits to `delins` by default.
 - `HGVSVariant.__eq__` compares via `format()` string output.
 - `PyHGVSVariant.format(max_ref_length=N)` strips long ref alleles from del/dup/delins per HGVS spec.
-- Transcripts for biocommons tests are provided via a committed `test_transcripts.json.gz` (cdot format).
+- `BioCommonsHGVSConverter.__init__` accepts any `hgvs.dataproviders.interface.Interface` — the `from_local_file`/`from_rest_api` classmethods use cdot but are purely optional. The plain constructor works with biocommons' default UTA provider (`hgvs.dataproviders.uta.connect()`).
+- Transcripts for integration tests are provided via a committed `test_transcripts.json.gz` (cdot format).
