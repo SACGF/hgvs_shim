@@ -24,8 +24,8 @@ Homepage = "https://github.com/SACGF/hgvs_shim"
 
 [project.optional-dependencies]
 pyhgvs = ["pyhgvs", "pysam"]
-test = ["pytest>=8", "pytest-cov"]
-dev = ["hgvs_shim[pyhgvs]", "pytest>=8", "pytest-cov", "cdot"]
+test = ["hgvs_shim[pyhgvs]", "pytest>=8", "pytest-cov", "cdot"]
+dev = ["hgvs_shim[pyhgvs]", "hgvs_shim[test]"]
 
 
 [tool.setuptools.packages.find]
