@@ -98,7 +98,7 @@ class BioCommonsHGVSVariant(HGVSVariant):
     def get_cdna_coords(self) -> str:
         return str(self._sequence_variant.posedit.pos.start)
 
-    def format(self, use_delins_for_inv: bool = True, max_ref_length=None):
+    def format(self, use_delins_for_inv: bool = False, max_ref_length=None):
         sv: SequenceVariant = self._sequence_variant
         if use_delins_for_inv:
             if sv.posedit.edit.type == "inv":
@@ -141,23 +141,22 @@ class BioCommonsHGVSConverter(HGVSConverter):
         self.no_validate_normalizer = Normalizer(self.hdp, cross_boundaries=True, validate=False,
                                                  variantmapper=self.no_validate_mapper)
 
-    @staticmethod
-    def _parser_hgvs(hgvs_string: str) -> SequenceVariant:
-        """ All calls to parsing go through here """
+    def _parser_hgvs(self, hgvs_string: str) -> SequenceVariant:
+        """ All calls to parsing go through here. Protected: subclasses may override. """
 
         HGVSConverter._hgvs_string_validation(hgvs_string)
 
         # Biocommons HGVS doesn't accept integers on the end of indels - ie NM_001354689.1(RAF1):c.1_2dup3
         # We want to strip these and raise an error if the span is wrong
         provided_span_length = None
-        if m := BioCommonsHGVSConverter.hgvs_span_trailing_int_length_pattern.match(hgvs_string):
+        if m := self.hgvs_span_trailing_int_length_pattern.match(hgvs_string):
             hgvs_string, provided_span_length = m.groups()
             provided_span_length = int(provided_span_length)
 
         try:
             sequence_variant = _hgvs_parser.parse(hgvs_string)
         except HGVSError as hgvs_error:
-            klass = BioCommonsHGVSConverter._get_exception_class(hgvs_error)
+            klass = self._get_exception_class(hgvs_error)
             raise klass(hgvs_error) from hgvs_error
 
         if provided_span_length is not None:
@@ -265,6 +264,12 @@ class BioCommonsHGVSConverter(HGVSConverter):
         return var_m
 
     def _hgvs_to_g_hgvs(self, hgvs_string: str) -> SequenceVariant:
+        """Convert any HGVS string to a genomic SequenceVariant.
+
+        Protected: subclasses may override to add behaviour (ref fixing, normalization
+        tracking, etc.). Called internally by hgvs_to_variant_coordinate(). Subclass
+        overrides may return a richer type if they also override hgvs_to_variant_coordinate().
+        """
         CONVERT_TO_G = {
             'c': self.am.c_to_g,
             'n': self.am.n_to_g,

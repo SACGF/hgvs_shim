@@ -105,7 +105,7 @@ class HGVSVariant(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def format(self, use_delins_for_inv: bool = True, max_ref_length=None):
+    def format(self, use_delins_for_inv: bool = False, max_ref_length=None):
         pass
 
     @abc.abstractmethod

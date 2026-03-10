@@ -1,7 +1,7 @@
 import abc
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import IntEnum
 from typing import Optional
 
 from hgvs_shim.hgvs_variant import HGVSVariant
@@ -19,10 +19,11 @@ class HGVSImplementationException(HGVSException):
     """ HGVSException subclass for when problem is with the library (users can NOT fix) """
 
 
-class HGVSConverterType(Enum):
+class HGVSConverterType(IntEnum):
     PYHGVS = 1
     BIOCOMMONS_HGVS = 2
     COMBO = 3
+    # Values 4+ are reserved for application-specific converters
 
 
 @dataclass

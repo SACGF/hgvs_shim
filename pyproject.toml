@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hgvs_shim"
-version = "0.1.0"
+version = "0.2.0"
 license = { text = "MIT" }
 description = "Abstract PyHGVS and Biocommons HGVS libraries"
 readme = { file = "README.md", content-type = "text/markdown" }
