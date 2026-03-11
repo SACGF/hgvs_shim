@@ -2,7 +2,7 @@
 
 [![pypi_rel](https://img.shields.io/pypi/v/hgvs_shim.svg)](https://pypi.org/project/hgvs_shim/)
 
-hgvs-shim is a small compatibility layer that simplifies migrating code from the [Counsyl pyhgvs](https://github.com/counsyl/hgvs) library to [Biocommons HGVS](https://github.com/biocommons/hgvs).
+hgvs-shim is a small compatibility layer that simplifies migrating code from the [Counsyl pyhgvs](https://github.com/counsyl/hgvs) library (which has been unmaintained for 6 years) to [Biocommons HGVS](https://github.com/biocommons/hgvs) (which is under active development)
 
 # Background
 
