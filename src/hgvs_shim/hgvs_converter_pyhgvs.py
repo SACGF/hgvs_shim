@@ -1,3 +1,5 @@
+from __future__ import annotations  # HGVSName annotations must not be evaluated without the pyhgvs extra
+
 import logging
 import sys
 from importlib import metadata
